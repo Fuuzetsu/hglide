@@ -4,6 +4,7 @@ import System.Random
 import Graphics.UI.GLUT
 import System.Exit ( exitWith, ExitCode(ExitSuccess) )
 import Foreign.C.Types
+-- import Control.Monad.State
 
 data LifeState = Alive | Dead deriving (Show, Eq)
 data Grid = Grid { sizeX :: Int
@@ -13,6 +14,16 @@ data Grid = Grid { sizeX :: Int
                  } deriving Show
 type Coord = (Int, Int, Int)
 type Cell = LifeState
+
+data State = State { gr :: Grid }
+
+makeState :: IO State
+makeState = do
+  g <- randomGrid
+  return $ State { gr = g }
+  
+putState :: Grid -> State
+putState g = State { gr = g }
 
 dimensions = 3 -- only used as helper for now
 
@@ -132,20 +143,22 @@ randomGrid = do
   return ng
 
 
-keyboard :: KeyboardMouseCallback
-keyboard (Char '\27') Down _ _ = exitWith ExitSuccess
-keyboard (Char 'd') Down _ _ = display
-keyboard _            _    _ _ = return ()
+keyboard :: State -> KeyboardMouseCallback
+keyboard state (Char c) Down _ _ = case c of
+  '\27' -> exitWith ExitSuccess
+  'd' -> display $ putState $ advance $ gr state
+  _ -> return ()
+keyboard _ _ _ _ _ = return ()
 
-display :: DisplayCallback
-display = do
+display :: State -> DisplayCallback
+display state = do
   clear [ ColorBuffer, DepthBuffer ]
+  putStrLn "Running display"
   -- resolve overloading, not needed in "real" programs
   let color3f = color :: Color3 GLfloat -> IO ()
   let scalef = scale :: GLfloat -> GLfloat -> GLfloat -> IO ()
   color3f (Color3 1 1 1)
-  gen <- getStdGen
-  grid <- randomGrid
+  let grid = gr state
   -- putStrLn . show $ grid
   -- putStrLn ""
   -- putStrLn . show $ advance grid
@@ -274,7 +287,9 @@ main = do
   initialWindowPosition $= Position 100 100
   createWindow "hglide"
   myInit
-  displayCallback $= display
+  -- state <- makeState
+  let state = State { gr = invertCluster (invertCluster (resurrectCluster defaultGrid (2,2,2)) (2,3,2)) (2, 4, 3)}
+  displayCallback $= display state
   reshapeCallback $= Just reshape
-  keyboardMouseCallback $= Just keyboard
+  keyboardMouseCallback $= Just (keyboard state)
   mainLoop
