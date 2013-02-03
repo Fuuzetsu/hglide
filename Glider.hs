@@ -16,7 +16,7 @@ type Cell = LifeState
 
 dimensions = 3 -- only used as helper for now
 
-xsize = 5
+xsize = 10
 ysize = xsize
 zsize = xsize
 
@@ -68,18 +68,31 @@ gH g (x, y, z) = (f x $ sizeX g, f y $ sizeY g, f z $ sizeZ g)
                      else d
 
 getNeighbours :: Grid -> Coord -> [Cell]
-getNeighbours g (x,y,z) = [ getCell g $ gH g (x + a, y + b, z + c) | a <- [-1, 0, 1]
-                                                                   , b <- [-1, 0, 1]
-                                                                   , c <- [-1, 0, 1]
-                                                                   , (a, b, c) /= (0, 0, 0)
-                                                                   ]
+getNeighbours g c = map (\(cl, _) -> cl) $ getNeighboursWithCoords g c
+
+getNeighboursWithCoords :: Grid -> Coord -> [(Cell, Coord)]
+getNeighboursWithCoords g (x,y,z) = [ (getCell g $ gH g (x + a, y + b, z + c), (x + a, y + b, z + c)) | a <- [-1, 0, 1]
+                                                                                                      , b <- [-1, 0, 1]
+                                                                                                      , c <- [-1, 0, 1]
+                                                                                                      , (a, b, c) /= (0, 0, 0)
+                                                                                                      ]
+
+runOnCluster :: Grid -> Coord -> (Grid -> Coord -> Grid) -> Grid
+runOnCluster g c f = foldl f g $ map (\(_, crd) -> crd) (getNeighboursWithCoords g c)
+
+killCluster, invertCluster, resurrectCluster :: Grid -> Coord -> Grid
+killCluster g c = runOnCluster g c killCell
+invertCluster g c = runOnCluster g c invertCell
+resurrectCluster g c = runOnCluster g c resurrectCell
+                                  
 
 putCell :: Grid -> Coord -> LifeState -> Grid
 putCell g (x,y,z) cl = g { cells = replaceNth x (replaceNth y (replaceNth z cl ((cells g) !! x !! y)) ((cells g) !! x)) (cells g) }
 
-resurrectCell, killCell :: Grid -> Coord -> Grid
+resurrectCell, killCell, invertCell :: Grid -> Coord -> Grid
 killCell g c = putCell g c Dead
 resurrectCell g c = putCell g c Alive
+invertCell g c = putCell g c (if getCell g c == Alive then Dead else Alive)
 
 putRow :: Grid -> Int -> Int -> LifeState -> Grid
 putRow g x y cl = g { cells = replaceNth x (replaceNth y (replicate (sizeZ g) cl) ((cells g) !! x)) (cells g) }
