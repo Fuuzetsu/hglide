@@ -147,6 +147,7 @@ keyboard :: State -> KeyboardMouseCallback
 keyboard state (Char c) Down _ _ = case c of
   '\27' -> exitWith ExitSuccess
   'd' -> display $ putState $ advance $ gr state
+  'r' -> makeState >>= display
   _ -> return ()
 keyboard _ _ _ _ _ = return ()
 
@@ -287,8 +288,8 @@ main = do
   initialWindowPosition $= Position 100 100
   createWindow "hglide"
   myInit
-  -- state <- makeState
-  let state = State { gr = invertCluster (invertCluster (resurrectCluster defaultGrid (2,2,2)) (2,3,2)) (2, 4, 3)}
+  state <- makeState
+  -- let state = State { gr = invertCluster (invertCluster (resurrectCluster defaultGrid (2,2,2)) (2,3,2)) (2, 4, 3)}
   displayCallback $= display state
   reshapeCallback $= Just reshape
   keyboardMouseCallback $= Just (keyboard state)
