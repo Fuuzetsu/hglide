@@ -18,29 +18,23 @@ data Grid = Grid { sizeX :: Int
 type Coord = (Int, Int, Int)
 type Cell = LifeState
 
-data State = State Grid
-
-globalVarState :: IORef Grid
-globalVarState = unsafePerformIO (newIORef defaultGrid)
+data State = State { grid :: IORef Grid
+                   , cycle :: IORef Int
+                   }
 
 makeState :: IO State
 makeState = do
   g <- randomGrid
+  gr <- newIORef g
+  c <- newIORef 0
   putStrLn "In makeState"
-  putState g
-  return $ State g
+  return State { grid = gr
+               , Main.cycle = c
+               }
   
-putState :: Grid -> IO ()
-putState g = writeIORef globalVarState g
-
-getSt :: State -> Grid
-getSt (State g) = g
-
-gst = readIORef globalVarState
-
 dimensions = 3 -- only used as helper for now
 
-xsize = 3
+xsize = 5
 ysize = xsize
 zsize = xsize
 
@@ -127,7 +121,6 @@ getNeighboursWithCoords g (x,y,z) = [ (getCell g $ gH g (x + a, y + b, z + c), (
                                                                                                       , (a, b, c) /= (0, 0, 0)
                                                                                                       ]
 
-(<<) = flip (>>)
 
 runOnCluster :: Grid -> Coord -> (Grid -> Coord -> Grid) -> Grid
 runOnCluster g c f = foldl f g $ map (\(_, crd) -> crd) (getNeighboursWithCoords g c)
@@ -168,9 +161,11 @@ replaceNth n newVal (x:xs)
 
 
 getRndCl :: Int -> LifeState
-getRndCl n | xsize - (xsize `div` 3) > n = Alive
-getRndCl _ = Dead
+getRndCl n | xsize - (xsize `div` 5) > n = Dead
+getRndCl _ = Alive
 
+aliveInFive :: Grid -> Bool
+aliveInFive = (\(a, _) -> a > 0) . countCells . advance . advance . advance . advance . advance
 
 randomRow :: Int -> IO [LifeState]
 randomRow n = do
@@ -193,50 +188,62 @@ splitE n ls
   | otherwise = chunksOf n ls
 
 
-keyboard :: KeyboardMouseCallback
-keyboard (Char c) Down _ _ = case c of
+keyboard :: State -> KeyboardMouseCallback
+keyboard state (Char c) Down _ _ = case c of
   '\27' -> exitWith ExitSuccess
-  't' -> display << (putState =<< gst)
+  't' -> display state
   'd' -> do
-    g <- gst
-    putState $ advance g
-    display
+    update grid $ advance
+    display state
   'i' -> do
-    g <- gst
-    putState $ invertGrid g
-    display
+    update grid $ invertGrid
+    display state
   'k' -> do
-    g <- gst
-    putState $ killGrid g
-    display 
+    update grid $ killGrid
+    display state
   'l' -> do
-    g <- gst
-    putState $ resurrectGrid g
-    display
-  'r' -> makeState >> display
-  'n' -> display
+    update grid $ resurrectGrid
+    display state
+  'r' -> do
+    newst <- makeState
+    newg <- readIORef $ grid newst
+    -- if aliveInFive newg then putStrLn "Will be alive in 5" else putStrLn "Will be dead in 5"
+    -- if aliveInFive newg then return () else keyboard state (Char 'r') Down undefined undefined
+    updateR grid $ \_ -> newg
+    display state
+  'n' -> display state
   _ -> return ()
+  where update gr newg = do
+          gr state $~ newg
+          Main.cycle state $~ \x -> x + 1
+        updateR gr newg = do
+          gr state $~ newg
+          Main.cycle state $~ \_ -> 0
+        iog = readIORef $ grid state
+          
 
-keyboard _ _ _ _ = return ()
+keyboard _ _ _ _ _ = return ()
 
-display :: DisplayCallback
-display  = do
+display :: State -> DisplayCallback
+display state = do
   clear [ ColorBuffer, DepthBuffer ]
   -- resolve overloading, not needed in "real" programs
   let color3f = color :: Color3 GLfloat -> IO ()
   let scalef = scale :: GLfloat -> GLfloat -> GLfloat -> IO ()
   color3f (Color3 1 1 1)
-  grid <- gst
-  let (a,d) = countCells grid
+  gr <- readIORef $ grid state
+  c <- readIORef $ Main.cycle state
+  let (a,d) = countCells gr
   putStrLn $ "Alive: " ++ (show a) ++ " Dead: " ++ (show d)
-  -- putStrLn . show $ grid
+  putStrLn $ "Generation: " ++ show c
+  -- putStrLn . show $ gr
   -- putStrLn ""
-  -- putStrLn . show $ advance grid
-  let (x,y,z) = (sizeX grid, sizeY grid, sizeZ grid)
+  -- putStrLn . show $ advance gr
+  let (x,y,z) = (sizeX gr, sizeY gr, sizeZ gr)
   let crds = [f a b c | a <- [0 .. x - 1]
                       , b <- [0 .. y - 1]
                       , c <- [0 .. z - 1]
-                      , getCell grid (a,b,c) == Alive
+                      , getCell gr (a,b,c) == Alive
               ]
         where f a b c = (CDouble x, CDouble y, CDouble z)
                 where x = 0.01 * (fromIntegral a)
@@ -340,7 +347,7 @@ main = do
   myInit
   state <- makeState
   -- let state = State { gr = invertCluster (invertCluster (resurrectCluster defaultGrid (2,2,2)) (2,3,2)) (2, 4, 3)}
-  displayCallback $= display
+  displayCallback $= display state
   reshapeCallback $= Just reshape
-  keyboardMouseCallback $= Just keyboard
+  keyboardMouseCallback $= Just (keyboard state)
   mainLoop
