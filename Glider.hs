@@ -4,6 +4,9 @@ import System.Random
 import Graphics.UI.GLUT
 import System.Exit ( exitWith, ExitCode(ExitSuccess) )
 import Foreign.C.Types
+import Data.List.Split
+import System.IO.Unsafe
+import Data.IORef
 -- import Control.Monad.State
 
 data LifeState = Alive | Dead deriving (Show, Eq)
@@ -11,23 +14,33 @@ data Grid = Grid { sizeX :: Int
                  , sizeY :: Int
                  , sizeZ :: Int
                  , cells :: [[[LifeState]]]
-                 } deriving Show
+                 } deriving (Show, Eq)
 type Coord = (Int, Int, Int)
 type Cell = LifeState
 
-data State = State { gr :: Grid }
+data State = State Grid
+
+globalVarState :: IORef Grid
+globalVarState = unsafePerformIO (newIORef defaultGrid)
 
 makeState :: IO State
 makeState = do
   g <- randomGrid
-  return $ State { gr = g }
+  putStrLn "In makeState"
+  putState g
+  return $ State g
   
-putState :: Grid -> State
-putState g = State { gr = g }
+putState :: Grid -> IO ()
+putState g = writeIORef globalVarState g
+
+getSt :: State -> Grid
+getSt (State g) = g
+
+gst = readIORef globalVarState
 
 dimensions = 3 -- only used as helper for now
 
-xsize = 10
+xsize = 3
 ysize = xsize
 zsize = xsize
 
@@ -37,8 +50,34 @@ makeGrid x y z = Grid { sizeX = x
                       , cells = [ [ [ Dead | _ <- [0 .. z - 1] ] | _ <- [0 .. y - 1] ] | _ <- [0 .. x - 1] ]
                       }
 
+runOnEachCell :: Grid -> (LifeState -> LifeState) -> Grid
+runOnEachCell g f = g { cells = [ [ [ f (getCell g (x, y, z)) | z <- [0 .. (sizeZ g) - 1] ] | y <- [0 .. (sizeY g) - 1] ] | x <- [0 .. (sizeX g) - 1] ] }
+
+
+countCells :: Grid -> (Int, Int)
+countCells g = let crds = [ Alive | a <- [0 .. x - 1]
+                                  , b <- [0 .. y - 1]
+                                  , c <- [0 .. z - 1]
+                                  , getCell g (a,b,c) == Alive
+                                  ]
+                     where x = sizeX g
+                           y = sizeY g
+                           z = sizeZ g
+               in (length crds, (sizeX g * sizeY g * sizeZ g - length crds))
+
+
+invertGrid :: Grid -> Grid
+invertGrid g = runOnEachCell g (\x -> if x == Alive then Dead else Alive)
+
+resurrectGrid :: Grid -> Grid
+resurrectGrid g = runOnEachCell g (\_ -> Alive)
+
+killGrid :: Grid -> Grid
+killGrid g = runOnEachCell g (\_ -> Dead)
+
 advance :: Grid -> Grid
 advance g = g { cells = [ [ [ rule g (x, y, z) | z <- [0 .. (sizeZ g) - 1] ] | y <- [0 .. (sizeY g) - 1] ] | x <- [0 .. (sizeX g) - 1] ] }
+
 
 advanceN :: Grid -> Integer -> Grid
 advanceN g 0 = g
@@ -88,6 +127,8 @@ getNeighboursWithCoords g (x,y,z) = [ (getCell g $ gH g (x + a, y + b, z + c), (
                                                                                                       , (a, b, c) /= (0, 0, 0)
                                                                                                       ]
 
+(<<) = flip (>>)
+
 runOnCluster :: Grid -> Coord -> (Grid -> Coord -> Grid) -> Grid
 runOnCluster g c f = foldl f g $ map (\(_, crd) -> crd) (getNeighboursWithCoords g c)
 
@@ -126,40 +167,68 @@ replaceNth n newVal (x:xs)
   | otherwise = x:replaceNth (n-1) newVal xs
 
 
-getRndCl :: Bool -> LifeState
-getRndCl True = Alive
+getRndCl :: Int -> LifeState
+getRndCl n | xsize - (xsize `div` 3) > n = Alive
 getRndCl _ = Dead
+
 
 randomRow :: Int -> IO [LifeState]
 randomRow n = do
-  rs <- mapM randomRIO $ replicate n (True, False)
+  rs <- mapM randomRIO $ replicate n (1, xsize)
   return $ map getRndCl rs
 
 randomGrid :: IO Grid
 randomGrid = do
   let g = defaultGrid
-  row <- randomRow $ sizeZ g
-  let ng = g { cells = [ [ row | _ <- [0 .. sizeY g - 1]] | _ <- [0 .. sizeX g - 1] ]}
+  row <- randomRow $ (sizeZ g * sizeY g * sizeX g)
+  let csplit = splitE (sizeX g * sizeY g) row
+  let rsplit = map (splitE (sizeY g)) csplit
+  let ng = g { cells = rsplit }
   return ng
 
 
-keyboard :: State -> KeyboardMouseCallback
-keyboard state (Char c) Down _ _ = case c of
-  '\27' -> exitWith ExitSuccess
-  'd' -> display $ putState $ advance $ gr state
-  'r' -> makeState >>= display
-  _ -> return ()
-keyboard _ _ _ _ _ = return ()
+splitE :: Int -> [a] -> [[a]]
+splitE n ls
+  | length ls `mod` n /= 0 = error "Can't split the list evenly"
+  | otherwise = chunksOf n ls
 
-display :: State -> DisplayCallback
-display state = do
+
+keyboard :: KeyboardMouseCallback
+keyboard (Char c) Down _ _ = case c of
+  '\27' -> exitWith ExitSuccess
+  't' -> display << (putState =<< gst)
+  'd' -> do
+    g <- gst
+    putState $ advance g
+    display
+  'i' -> do
+    g <- gst
+    putState $ invertGrid g
+    display
+  'k' -> do
+    g <- gst
+    putState $ killGrid g
+    display 
+  'l' -> do
+    g <- gst
+    putState $ resurrectGrid g
+    display
+  'r' -> makeState >> display
+  'n' -> display
+  _ -> return ()
+
+keyboard _ _ _ _ = return ()
+
+display :: DisplayCallback
+display  = do
   clear [ ColorBuffer, DepthBuffer ]
-  putStrLn "Running display"
   -- resolve overloading, not needed in "real" programs
   let color3f = color :: Color3 GLfloat -> IO ()
   let scalef = scale :: GLfloat -> GLfloat -> GLfloat -> IO ()
   color3f (Color3 1 1 1)
-  let grid = gr state
+  grid <- gst
+  let (a,d) = countCells grid
+  putStrLn $ "Alive: " ++ (show a) ++ " Dead: " ++ (show d)
   -- putStrLn . show $ grid
   -- putStrLn ""
   -- putStrLn . show $ advance grid
@@ -185,46 +254,27 @@ display state = do
   preservingMatrix $ do
     rotate (20 :: GLfloat) (Vector3 1 0.5 0)
     scalef 30 30 30
+    --preservingMatrix $ do
+    --color (Color3 1 1 (1 :: GLfloat))
+    --cubeFrame (0.05 :: GLfloat)
+    let s = 0.003
     mapM (\(a,b,c) ->
            preservingMatrix $ do
              -- color (Color3 0 0 (0 :: GLfloat))
              translate (Vector3 a b c)
              -- cube (0.01 :: GLfloat)
-             color (Color3 1 1 (1 :: GLfloat))
-             cubeFrame (0.01 :: GLfloat)) allc
+             color (Color3 1 1 (1 :: GLfloat)))allc
+             --cubeFrame (0.007 :: GLfloat)) allc
     mapM (\(a,b,c) ->
            preservingMatrix $ do
              -- scalef 7 7 7
              color (Color3 1 0 (0 :: GLfloat))
              translate (Vector3 a b c)
-             cube (0.01 :: GLfloat)) crds
-             -- color (Color3 1 1 (1 :: GLfloat))
-             -- cubeFrame (0.01 :: GLfloat)) crds
-    translate (Vector3 4.0 0.0 (-1.0 :: GLfloat))
-    -- let (a,b,c) = last crds
-    -- putStrLn $ show (a,b,c)
-    -- preservingMatrix $ do
-    --   translate (Vector3 (a + 3) b c)
-    --   scalef 3 3 3
-    --   color (Color3 1 1 (1 :: GLfloat))
-    --   translate (Vector3 a b c)
-    --   cube (0.1 :: GLfloat)
-    --   color (Color3 1 0 (0 :: GLfloat))
-    --   cubeFrame (0.1 :: GLfloat)
-    color (Color3 1 1 (1 :: GLfloat))
-    -- preservingMatrix $ do
-    --   translate (Vector3 (-0.75) 0.5 (0 :: GLfloat))
-    --   rotate (90 :: GLfloat) (Vector3 1 0 0)
-    --   renderObject Solid (Torus 0.275 0.85 15 15)
-    -- preservingMatrix $ do
-    --   translate (Vector3 (-0.75) (-0.5) (0 :: GLfloat))
-    --   rotate (270 :: GLfloat) (Vector3 1 0 0)
-    --   renderObject Solid (Cone 1 2 15 15)
-    -- preservingMatrix $ do
-    --   translate (Vector3 0.75 0 (-1 :: GLfloat))
-    --   renderObject Solid (Sphere' 1 15 15)
+             cube (s :: GLfloat)
+             color (Color3 1 1 (1 :: GLfloat))
+             cubeFrame (s :: GLfloat)) crds
 
-  --lookAt (Vertex3 20 10 5) (Vertex3 0 0 0) (Vector3 0 1 0)
+    translate (Vector3 4.0 0.0 (-1.0 :: GLfloat))
   flush
 
 myInit :: IO ()
@@ -290,7 +340,7 @@ main = do
   myInit
   state <- makeState
   -- let state = State { gr = invertCluster (invertCluster (resurrectCluster defaultGrid (2,2,2)) (2,3,2)) (2, 4, 3)}
-  displayCallback $= display state
+  displayCallback $= display
   reshapeCallback $= Just reshape
-  keyboardMouseCallback $= Just (keyboard state)
+  keyboardMouseCallback $= Just keyboard
   mainLoop
