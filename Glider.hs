@@ -7,18 +7,19 @@ import Foreign.C.Types
 import Data.List.Split
 import System.IO.Unsafe
 import Data.IORef
+import Data.Map (toList, fromListWith)
 -- import Control.Monad.State
 
-data LifeState = Alive | Dead deriving (Show, Eq)
-data Grid = Grid { sizeX :: Int
-                 , sizeY :: Int
-                 , sizeZ :: Int
-                 , cells :: [[[LifeState]]]
-                 } deriving (Show, Eq)
+
+data ThreeDGrid = ThreeDGrid { sizeX :: Int
+                             , sizeY :: Int
+                             , sizeZ :: Int
+                             , cells :: [[[LifeState]]]
+                             } deriving (Show, Eq)
 type Coord = (Int, Int, Int)
 type Cell = LifeState
 
-data State = State { grid :: IORef Grid
+data State = State { grid :: IORef ThreeDGrid
                    , cycle :: IORef Int
                    }
 
@@ -32,128 +33,100 @@ makeState = do
                , Main.cycle = c
                }
   
-dimensions = 3 -- only used as helper for now
+
+data LifeState = Alive | Dead deriving (Show, Eq)
+data ThreeDCoord = ThreeDCoord Int Int Int
+
+instance NDimCoord ThreeDCoord where
+  coordSize c = 3
+  coords (ThreeDCoord x y z) = [x, y, z]
+  getNthDim c n = coords c !! (n - 1)
+
+instance LifeGrid ThreeDGrid where
+  dimensions g = 3
+  size g = map (flip id g) [sizeX, sizeY, sizeZ]
+  getElem g c = cells g !! (gn 1) !! (gn 2) !! (gn 3)
+    where gn = getNthDim c
+  setElem g c cl = g { cells = replaceNth x (replaceNth y (replaceNth z cl ((cells g) !! x !! y)) ((cells g) !! x)) (cells g) }
+    where x = coords c !! 0
+          y = coords c !! 1
+          z = coords c !! 2
+  defaultGrid szs = makeGrid (szs !! 0) (szs !! 1) (szs !! 2)
+    where
+      makeGrid x y z = ThreeDGrid { sizeX = x
+                                  , sizeY = y
+                                  , sizeZ = z
+                                  , cells = [ [ [ Dead | _ <- [0 .. z - 1] ] | _ <- [0 .. y - 1] ] | _ <- [0 .. x - 1] ]
+                                  }
+  neighbours g c = [ getElem g $ gH g (ThreeDCoord (x + a) (y + b) (z + c)) | a <- [-1, 0, 1]
+                                                                            , b <- [-1, 0, 1]
+                                                                            , c <- [-1, 0, 1]
+                                                                            , (a, b, c) /= (0, 0, 0)
+                                                                            ]
+    where
+      x = coords c !! 0
+      y = coords c !! 1
+      z = coords c !! 2
+      gH g cr = ThreeDCoord (f (getNthDim cr 1) $ sizeX g) (f (getNthDim cr 2) $ sizeY g) (f (getNthDim cr 3) $ sizeZ g)
+        where f d m = if d > (m - 1)
+                      then 0
+                      else if d < 0
+                           then m - 1
+                           else d
+
+  advance g = g { cells = [ [ [ rule g (getElem g (ThreeDCoord x y z)) (neighbours g (ThreeDCoord x y z)) | z <- [0 .. (size g !! 2) - 1] ] | y <- [0 .. (size g !! 1) - 1] ] | x <- [0 .. (size g !! 0) - 1] ] }
+  applyToGrid g f = g { cells = [ [ [ f (getElem g (ThreeDCoord x y z)) | z <- [0 .. (size g !! 2) - 1] ] | y <- [0 .. (size g !! 1) - 1] ] | x <- [0 .. (size g !! 0) - 1] ] }
+         
+
+instance ConvinientGrid ThreeDGrid where
+  resurrectGrid g = applyToGrid g (\_ -> Alive)
+  killGrid g = applyToGrid g (\_ -> Dead)
+  invertGrid g = applyToGrid g (\x -> if x == Alive then Dead else Alive)
+  countCellStates g = let crds = [ show (getElem g (ThreeDCoord a b c)) | a <- [0 .. x - 1]
+                                                                        , b <- [0 .. y - 1]
+                                                                        , c <- [0 .. z - 1]
+                                                                        ]
+                            where x = sizeX g
+                                  y = sizeY g
+                                  z = sizeZ g
+                      in toList $ fromListWith (+) [(str, 1) | str <- crds]
+
+class NDimCoord a where
+  coordSize :: a -> Int
+  coords :: a -> [Int]
+  getNthDim :: a -> Int -> Int
+
+class LifeGrid a where
+  dimensions :: a -> Int
+  size :: a -> [Int]
+  getElem :: (NDimCoord c) => a -> c -> LifeState
+  setElem :: (NDimCoord c) => a -> c -> LifeState -> a
+  defaultGrid :: [Int] -> a -- pass correct number of dimensions nodeptypinglel
+  neighbours :: (NDimCoord c) => a -> c -> [LifeState]
+  advance :: a -> a
+  applyToGrid :: a -> (LifeState -> LifeState) -> a -- map
+  rule :: a -> LifeState -> [LifeState] -> LifeState -- passes judgment, default rules
+  rule g cl ngs
+    | (3 ^ dimensions g) `div` 4 <= (length $ filter (== Alive) ngs) = Dead
+    | (3 ^ dimensions g) `div` 3 > (length $ filter (== Alive) ngs) = Dead
+    | (3 ^ dimensions g) `div` 3 == (length $ filter (== Alive) ngs) = Alive
+    | otherwise = Dead
+
+class (LifeGrid a) => ConvinientGrid a where
+  advanceN :: a -> Int -> a
+  advanceN grid 0 = grid
+  advanceN grid n = advanceN (advance grid) (n - 1)
+  invertGrid :: a -> a
+  resurrectGrid :: a -> a
+  killGrid :: a -> a
+  countCellStates :: a -> [(String, Int)] 
+
+class (LifeGrid a) => DrawableGrid a where
+  getList :: a -> IO DisplayList
 
 xsize = 5
 ysize = xsize
 zsize = xsize
-
-makeGrid x y z = Grid { sizeX = x
-                      , sizeY = y
-                      , sizeZ = z
-                      , cells = [ [ [ Dead | _ <- [0 .. z - 1] ] | _ <- [0 .. y - 1] ] | _ <- [0 .. x - 1] ]
-                      }
-
-runOnEachCell :: Grid -> (LifeState -> LifeState) -> Grid
-runOnEachCell g f = g { cells = [ [ [ f (getCell g (x, y, z)) | z <- [0 .. (sizeZ g) - 1] ] | y <- [0 .. (sizeY g) - 1] ] | x <- [0 .. (sizeX g) - 1] ] }
-
-
-countCells :: Grid -> (Int, Int)
-countCells g = let crds = [ Alive | a <- [0 .. x - 1]
-                                  , b <- [0 .. y - 1]
-                                  , c <- [0 .. z - 1]
-                                  , getCell g (a,b,c) == Alive
-                                  ]
-                     where x = sizeX g
-                           y = sizeY g
-                           z = sizeZ g
-               in (length crds, (sizeX g * sizeY g * sizeZ g - length crds))
-
-
-invertGrid :: Grid -> Grid
-invertGrid g = runOnEachCell g (\x -> if x == Alive then Dead else Alive)
-
-resurrectGrid :: Grid -> Grid
-resurrectGrid g = runOnEachCell g (\_ -> Alive)
-
-killGrid :: Grid -> Grid
-killGrid g = runOnEachCell g (\_ -> Dead)
-
-advance :: Grid -> Grid
-advance g = g { cells = [ [ [ rule g (x, y, z) | z <- [0 .. (sizeZ g) - 1] ] | y <- [0 .. (sizeY g) - 1] ] | x <- [0 .. (sizeX g) - 1] ] }
-
-
-advanceN :: Grid -> Integer -> Grid
-advanceN g 0 = g
-advanceN g n = advanceN (advance g) (n - 1)
-
-
-isUnderPopulated :: Grid -> Coord -> Bool
-isUnderPopulated g c = (3 ^ dimensions) `div` 4 <= (length $ filter (\x -> x == Alive) (getNeighbours g c))
-
-isOverCrowded :: Grid -> Coord -> Bool
-isOverCrowded g c = (3 ^ dimensions) `div` 3 > (length $ filter (\x -> x == Alive) (getNeighbours g c))
-
-shouldRevive :: Grid -> Coord -> Bool
-shouldRevive g c
-  | getCell g c == Alive = False
-  | otherwise = getCell g c == Dead && (3 ^ dimensions) `div` 3 == (length $ filter (\x -> x == Alive) (getNeighbours g c))
-
-rule :: Grid -> Coord -> Cell
-rule g c@(x,y,z)
-  | cl == Alive && undrPop = Dead
-  | cl == Alive && overPop = Dead
-  | cl == Dead && rev = Alive
-  | otherwise = cl
-  where cl = getCell g c
-        undrPop = isUnderPopulated g c
-        overPop = isOverCrowded g c
-        rev = shouldRevive g c
-
-getCell :: Grid -> Coord -> Cell
-getCell g (x,y,z) = (cells g) !! x !! y !! z
-
-gH :: Grid -> Coord -> Coord
-gH g (x, y, z) = (f x $ sizeX g, f y $ sizeY g, f z $ sizeZ g)
-  where f d m = if d > (m - 1)
-                then 0
-                else if d < 0
-                     then m - 1
-                     else d
-
-getNeighbours :: Grid -> Coord -> [Cell]
-getNeighbours g c = map (\(cl, _) -> cl) $ getNeighboursWithCoords g c
-
-getNeighboursWithCoords :: Grid -> Coord -> [(Cell, Coord)]
-getNeighboursWithCoords g (x,y,z) = [ (getCell g $ gH g (x + a, y + b, z + c), (x + a, y + b, z + c)) | a <- [-1, 0, 1]
-                                                                                                      , b <- [-1, 0, 1]
-                                                                                                      , c <- [-1, 0, 1]
-                                                                                                      , (a, b, c) /= (0, 0, 0)
-                                                                                                      ]
-
-
-runOnCluster :: Grid -> Coord -> (Grid -> Coord -> Grid) -> Grid
-runOnCluster g c f = foldl f g $ map (\(_, crd) -> crd) (getNeighboursWithCoords g c)
-
-killCluster, invertCluster, resurrectCluster :: Grid -> Coord -> Grid
-killCluster g c = runOnCluster g c killCell
-invertCluster g c = runOnCluster g c invertCell
-resurrectCluster g c = runOnCluster g c resurrectCell
-                                  
-
-putCell :: Grid -> Coord -> LifeState -> Grid
-putCell g (x,y,z) cl = g { cells = replaceNth x (replaceNth y (replaceNth z cl ((cells g) !! x !! y)) ((cells g) !! x)) (cells g) }
-
-resurrectCell, killCell, invertCell :: Grid -> Coord -> Grid
-killCell g c = putCell g c Dead
-resurrectCell g c = putCell g c Alive
-invertCell g c = putCell g c (if getCell g c == Alive then Dead else Alive)
-
-putRow :: Grid -> Int -> Int -> LifeState -> Grid
-putRow g x y cl = g { cells = replaceNth x (replaceNth y (replicate (sizeZ g) cl) ((cells g) !! x)) (cells g) }
-
-replaceRow :: Grid -> Int -> Int -> [LifeState] -> Grid
-replaceRow g x y row = g { cells = replaceNth x (replaceNth y row ((cells g) !! x)) (cells g) }
-
-resurrectRow, killRow :: Grid -> Int -> Int -> Grid
-resurrectRow g x y = putRow g x y Alive
-killRow g x y = putRow g x y Dead
-
-defaultGrid :: Grid
-defaultGrid = makeGrid xsize ysize zsize
-
-getZ :: Grid -> Int -> Int -> [LifeState]
-getZ g x y = ((cells g) !! x) !! y
 
 replaceNth n newVal (x:xs)
   | n == 0 = newVal:xs
@@ -164,18 +137,15 @@ getRndCl :: Int -> LifeState
 getRndCl n | xsize - (xsize `div` 5) > n = Dead
 getRndCl _ = Alive
 
-aliveInFive :: Grid -> Bool
-aliveInFive = (\(a, _) -> a > 0) . countCells . advance . advance . advance . advance . advance
-
 randomRow :: Int -> IO [LifeState]
 randomRow n = do
   rs <- mapM randomRIO $ replicate n (1, xsize)
   return $ map getRndCl rs
 
-randomGrid :: IO Grid
+randomGrid :: IO ThreeDGrid
 randomGrid = do
-  let g = defaultGrid
-  row <- randomRow $ (sizeZ g * sizeY g * sizeX g)
+  let g = defaultGrid [5, 5, 5]
+  row <- randomRow $ (size g !! 0 * size g !! 1 * size g !! 2)
   let csplit = splitE (sizeX g * sizeY g) row
   let rsplit = map (splitE (sizeY g)) csplit
   let ng = g { cells = rsplit }
@@ -233,9 +203,9 @@ display state = do
   color3f (Color3 1 1 1)
   gr <- readIORef $ grid state
   c <- readIORef $ Main.cycle state
-  let (a,d) = countCells gr
-  putStrLn $ "Alive: " ++ (show a) ++ " Dead: " ++ (show d)
-  putStrLn $ "Generation: " ++ show c
+  putStrLn . concat $ map (\(s, v) -> s ++ ": " ++ (show v) ++ " ") $ countCellStates gr
+  -- putStrLn $ "Alive: " ++ a ++ " Dead: " ++ (show d)
+  -- putStrLn $ "Generation: " ++ show c
   -- putStrLn . show $ gr
   -- putStrLn ""
   -- putStrLn . show $ advance gr
@@ -243,7 +213,7 @@ display state = do
   let crds = [f a b c | a <- [0 .. x - 1]
                       , b <- [0 .. y - 1]
                       , c <- [0 .. z - 1]
-                      , getCell gr (a,b,c) == Alive
+                      , getElem gr (ThreeDCoord a b c) == Alive
               ]
         where f a b c = (CDouble x, CDouble y, CDouble z)
                 where x = 0.01 * (fromIntegral a)
