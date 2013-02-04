@@ -205,7 +205,7 @@ display state = do
   c <- readIORef $ Main.cycle state
   putStrLn . concat $ map (\(s, v) -> s ++ ": " ++ (show v) ++ " ") $ countCellStates gr
   -- putStrLn $ "Alive: " ++ a ++ " Dead: " ++ (show d)
-  -- putStrLn $ "Generation: " ++ show c
+  putStrLn $ "Generation: " ++ show c
   -- putStrLn . show $ gr
   -- putStrLn ""
   -- putStrLn . show $ advance gr
