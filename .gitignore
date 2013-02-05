@@ -7,3 +7,4 @@ cabal-dev
 .virthualenv
 /hglide
 /TAGS
+/Glider_flymake.hs
