@@ -4,7 +4,7 @@ module Main where
 
 import System.Random
 import Graphics.UI.GLUT
-import System.Exit ( exitWith, ExitCode(ExitSuccess) )
+import System.Exit ( exitWith, ExitCode(ExitSuccess), exitSuccess )
 import Foreign.C.Types
 import Data.List.Split
 import System.IO.Unsafe
