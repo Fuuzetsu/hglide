@@ -1,3 +1,5 @@
+{-# LANGUAGE MultiParamTypeClasses #-}
+
 module Main where
 
 import System.Random
@@ -19,11 +21,11 @@ data ThreeDGrid = ThreeDGrid { sizeX :: Int
 type Coord = (Int, Int, Int)
 type Cell = LifeState
 
-data State = State { grid :: IORef ThreeDGrid
-                   , cycle :: IORef Int
-                   }
+data State a = State { grid :: IORef a
+                     , cycle :: IORef Int
+                     }
 
-makeState :: IO State
+makeState :: IO (State ThreeDGrid)
 makeState = do
   g <- randomGrid
   gr <- newIORef g
@@ -76,6 +78,11 @@ instance LifeGrid ThreeDGrid where
 
   advance g = g { cells = [ [ [ rule g (getElem g (ThreeDCoord x y z)) (neighbours g (ThreeDCoord x y z)) | z <- [0 .. (size g !! 2) - 1] ] | y <- [0 .. (size g !! 1) - 1] ] | x <- [0 .. (size g !! 0) - 1] ] }
   applyToGrid g f = g { cells = [ [ [ f (getElem g (ThreeDCoord x y z)) | z <- [0 .. (size g !! 2) - 1] ] | y <- [0 .. (size g !! 1) - 1] ] | x <- [0 .. (size g !! 0) - 1] ] }
+  getAliveCellCoords g = [ ThreeDCoord a b c | a <- [0 .. size g !! 0 - 1]
+                                             , b <- [0 .. size g !! 1 - 1]
+                                             , c <- [0 .. size g !! 2 - 1]
+                                             , getElem g (ThreeDCoord a b c) == Alive
+                                             ]
          
 
 instance ConvinientGrid ThreeDGrid where
@@ -86,10 +93,29 @@ instance ConvinientGrid ThreeDGrid where
                                                                         , b <- [0 .. y - 1]
                                                                         , c <- [0 .. z - 1]
                                                                         ]
-                            where x = sizeX g
-                                  y = sizeY g
-                                  z = sizeZ g
+                            where x = size g !! 0
+                                  y = size g !! 1
+                                  z = size g !! 2
                       in toList $ fromListWith (+) [(str, 1) | str <- crds]
+
+instance DrawableGrid ThreeDGrid where
+  renderGrid g =  mapM (\(Vector3 a b c) ->
+                         preservingMatrix $ do
+                           color (Color3 1 0 (0 :: GLfloat))
+                           putStrLn $ show c
+                           translate (Vector3 a b c)
+                           cube (0.1 :: GLfloat)
+                           color (Color3 1 1 (1 :: GLfloat))
+                           cubeFrame (0.1 :: GLfloat)) $ map toOpenGLCoord $ getAliveCellCoords g
+
+              
+
+instance ConvertableCoord ThreeDCoord where
+  toOpenGLCoord c = Vector3 (CDouble x) (CDouble y) (CDouble z)
+    where x = fromIntegral $ getNthDim c 1
+          y = fromIntegral $ getNthDim c 2
+          z = fromIntegral $ getNthDim c 3
+
 
 class NDimCoord a where
   coordSize :: a -> Int
@@ -105,6 +131,7 @@ class LifeGrid a where
   neighbours :: (NDimCoord c) => a -> c -> [LifeState]
   advance :: a -> a
   applyToGrid :: a -> (LifeState -> LifeState) -> a -- map
+  getAliveCellCoords :: a -> [ThreeDCoord]
   rule :: a -> LifeState -> [LifeState] -> LifeState -- passes judgment, default rules
   rule g cl ngs
     | (3 ^ dimensions g) `div` 4 <= (length $ filter (== Alive) ngs) = Dead
@@ -121,8 +148,12 @@ class (LifeGrid a) => ConvinientGrid a where
   killGrid :: a -> a
   countCellStates :: a -> [(String, Int)] 
 
+class (NDimCoord a) => ConvertableCoord a where
+  toOpenGLCoord :: a -> Vector3 CDouble
+
 class (LifeGrid a) => DrawableGrid a where
-  getList :: a -> IO DisplayList
+  renderGrid :: a -> IO [()]
+  
 
 xsize = 5
 ysize = xsize
@@ -158,7 +189,7 @@ splitE n ls
   | otherwise = chunksOf n ls
 
 
-keyboard :: State -> KeyboardMouseCallback
+keyboard :: (LifeGrid g, ConvinientGrid g, DrawableGrid g) => State g -> KeyboardMouseCallback
 keyboard state (Char c) Down _ _ = case c of
   '\27' -> exitWith ExitSuccess
   't' -> display state
@@ -174,13 +205,13 @@ keyboard state (Char c) Down _ _ = case c of
   'l' -> do
     update grid $ resurrectGrid
     display state
-  'r' -> do
-    newst <- makeState
-    newg <- readIORef $ grid newst
-    -- if aliveInFive newg then putStrLn "Will be alive in 5" else putStrLn "Will be dead in 5"
-    -- if aliveInFive newg then return () else keyboard state (Char 'r') Down undefined undefined
-    updateR grid $ \_ -> newg
-    display state
+  -- 'r' -> do
+  --   newst <- makeState
+  --   newg <- readIORef $ grid newst
+  --   -- if aliveInFive newg then putStrLn "Will be alive in 5" else putStrLn "Will be dead in 5"
+  --   -- if aliveInFive newg then return () else keyboard state (Char 'r') Down undefined undefined
+  --   updateR grid $ \_ -> newg
+  --   display state
   'n' -> display state
   _ -> return ()
   where update gr newg = do
@@ -194,7 +225,7 @@ keyboard state (Char c) Down _ _ = case c of
 
 keyboard _ _ _ _ _ = return ()
 
-display :: State -> DisplayCallback
+display :: (DrawableGrid a, ConvinientGrid a) => State a -> DisplayCallback
 display state = do
   clear [ ColorBuffer, DepthBuffer ]
   -- resolve overloading, not needed in "real" programs
@@ -204,54 +235,10 @@ display state = do
   gr <- readIORef $ grid state
   c <- readIORef $ Main.cycle state
   putStrLn . concat $ map (\(s, v) -> s ++ ": " ++ (show v) ++ " ") $ countCellStates gr
-  -- putStrLn $ "Alive: " ++ a ++ " Dead: " ++ (show d)
   putStrLn $ "Generation: " ++ show c
-  -- putStrLn . show $ gr
-  -- putStrLn ""
-  -- putStrLn . show $ advance gr
-  let (x,y,z) = (sizeX gr, sizeY gr, sizeZ gr)
-  let crds = [f a b c | a <- [0 .. x - 1]
-                      , b <- [0 .. y - 1]
-                      , c <- [0 .. z - 1]
-                      , getElem gr (ThreeDCoord a b c) == Alive
-              ]
-        where f a b c = (CDouble x, CDouble y, CDouble z)
-                where x = 0.01 * (fromIntegral a)
-                      y = 0.01 * (fromIntegral b)
-                      z = 0.01 * (fromIntegral c)
-  let allc = [f a b c | a <- [0 .. x - 1]
-                      , b <- [0 .. y - 1]
-                      , c <- [0 .. z - 1]
-              ]
-        where f a b c = (CDouble x, CDouble y, CDouble z)
-                where x = 0.01 * (fromIntegral a)
-                      y = 0.01 * (fromIntegral b)
-                      z = 0.01 * (fromIntegral c)
-  -- putStrLn $ show crds
-  preservingMatrix $ do
-    rotate (20 :: GLfloat) (Vector3 1 0.5 0)
-    scalef 30 30 30
-    --preservingMatrix $ do
-    --color (Color3 1 1 (1 :: GLfloat))
-    --cubeFrame (0.05 :: GLfloat)
-    let s = 0.003
-    mapM (\(a,b,c) ->
-           preservingMatrix $ do
-             -- color (Color3 0 0 (0 :: GLfloat))
-             translate (Vector3 a b c)
-             -- cube (0.01 :: GLfloat)
-             color (Color3 1 1 (1 :: GLfloat)))allc
-             --cubeFrame (0.007 :: GLfloat)) allc
-    mapM (\(a,b,c) ->
-           preservingMatrix $ do
-             -- scalef 7 7 7
-             color (Color3 1 0 (0 :: GLfloat))
-             translate (Vector3 a b c)
-             cube (s :: GLfloat)
-             color (Color3 1 1 (1 :: GLfloat))
-             cubeFrame (s :: GLfloat)) crds
-
-    translate (Vector3 4.0 0.0 (-1.0 :: GLfloat))
+  
+  renderGrid gr
+  translate (Vector3 4.0 0.0 (-1.0 :: GLfloat))
   flush
 
 myInit :: IO ()
