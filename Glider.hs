@@ -46,14 +46,12 @@ instance NDimCoord ThreeDCoord where
 
 instance LifeGrid ThreeDGrid where
   dimensions g = 3
-  size g = map (flip id g) [sizeX, sizeY, sizeZ]
-  getElem g c = cells g !! (gn 1) !! (gn 2) !! (gn 3)
+  size g = map (`id` g) [sizeX, sizeY, sizeZ]
+  getElem g c = cells g !! gn 1 !! gn 2 !! gn 3
     where gn = getNthDim c
-  setElem g c cl = g { cells = replaceNth x (replaceNth y (replaceNth z cl ((cells g) !! x !! y)) ((cells g) !! x)) (cells g) }
-    where x = coords c !! 0
-          y = coords c !! 1
-          z = coords c !! 2
-  defaultGrid szs = makeGrid (szs !! 0) (szs !! 1) (szs !! 2)
+  setElem g c cl = g { cells = replaceNth x (replaceNth y (replaceNth z cl (cells g !! x !! y)) (cells g !! x)) (cells g) }
+    where [x, y, z] = coords c
+  defaultGrid szs = makeGrid (head szs) (szs !! 1) (szs !! 2)
     where
       makeGrid x y z = ThreeDGrid { sizeX = x
                                   , sizeY = y
@@ -66,19 +64,16 @@ instance LifeGrid ThreeDGrid where
                                                                             , (a, b, c) /= (0, 0, 0)
                                                                             ]
     where
-      x = coords c !! 0
-      y = coords c !! 1
-      z = coords c !! 2
+      [x, y, z] = coords c
       gH g cr = ThreeDCoord (f (getNthDim cr 1) $ sizeX g) (f (getNthDim cr 2) $ sizeY g) (f (getNthDim cr 3) $ sizeZ g)
-        where f d m = if d > (m - 1)
-                      then 0
-                      else if d < 0
-                           then m - 1
-                           else d
+        where f d m
+                | d > (m - 1) = 0
+                | d < 0 = m - 1
+                | otherwise = d
 
-  advance g = g { cells = [ [ [ rule g (getElem g (ThreeDCoord x y z)) (neighbours g (ThreeDCoord x y z)) | z <- [0 .. (size g !! 2) - 1] ] | y <- [0 .. (size g !! 1) - 1] ] | x <- [0 .. (size g !! 0) - 1] ] }
-  applyToGrid g f = g { cells = [ [ [ f (getElem g (ThreeDCoord x y z)) | z <- [0 .. (size g !! 2) - 1] ] | y <- [0 .. (size g !! 1) - 1] ] | x <- [0 .. (size g !! 0) - 1] ] }
-  getAliveCellCoords g = [ ThreeDCoord a b c | a <- [0 .. size g !! 0 - 1]
+  advance g = g { cells = [ [ [ rule g (getElem g (ThreeDCoord x y z)) (neighbours g (ThreeDCoord x y z)) | z <- [0 .. (size g !! 2) - 1] ] | y <- [0 .. (size g !! 1) - 1] ] | x <- [0 .. head (size g) - 1] ] }
+  applyToGrid g f = g { cells = [ [ [ f (getElem g (ThreeDCoord x y z)) | z <- [0 .. (size g !! 2) - 1] ] | y <- [0 .. (size g !! 1) - 1] ] | x <- [0 .. head (size g) - 1] ] }
+  getAliveCellCoords g = [ ThreeDCoord a b c | a <- [0 .. head (size g) - 1]
                                              , b <- [0 .. size g !! 1 - 1]
                                              , c <- [0 .. size g !! 2 - 1]
                                              , getElem g (ThreeDCoord a b c) == Alive
@@ -93,20 +88,21 @@ instance ConvinientGrid ThreeDGrid where
                                                                         , b <- [0 .. y - 1]
                                                                         , c <- [0 .. z - 1]
                                                                         ]
-                            where x = size g !! 0
+                            where x = head $ size g
                                   y = size g !! 1
                                   z = size g !! 2
                       in toList $ fromListWith (+) [(str, 1) | str <- crds]
 
 instance DrawableGrid ThreeDGrid where
-  renderGrid g =  mapM (\(Vector3 a b c) ->
-                         preservingMatrix $ do
-                           color (Color3 1 0 (0 :: GLfloat))
-                           putStrLn $ show c
-                           translate (Vector3 a b c)
-                           cube (0.1 :: GLfloat)
-                           color (Color3 1 1 (1 :: GLfloat))
-                           cubeFrame (0.1 :: GLfloat)) $ map toOpenGLCoord $ getAliveCellCoords g
+  renderGrid g =  mapM ((\(Vector3 a b c) ->
+                          preservingMatrix $ do
+                            color (Color3 1 0 (0 :: GLfloat))
+                            translate (Vector3 a b c)
+                            cube (0.1 :: GLfloat)
+                            color (Color3 1 1 (1 :: GLfloat))
+                            cubeFrame (0.1 :: GLfloat))
+                        . toOpenGLCoord)
+                  $ getAliveCellCoords g
 
               
 
@@ -134,9 +130,9 @@ class LifeGrid a where
   getAliveCellCoords :: a -> [ThreeDCoord]
   rule :: a -> LifeState -> [LifeState] -> LifeState -- passes judgment, default rules
   rule g cl ngs
-    | (3 ^ dimensions g) `div` 4 <= (length $ filter (== Alive) ngs) = Dead
-    | (3 ^ dimensions g) `div` 3 > (length $ filter (== Alive) ngs) = Dead
-    | (3 ^ dimensions g) `div` 3 == (length $ filter (== Alive) ngs) = Alive
+    | (3 ^ dimensions g) `div` 4 <= length (filter (== Alive) ngs) = Dead
+    | (3 ^ dimensions g) `div` 3 > length (filter (== Alive) ngs) = Dead
+    | (3 ^ dimensions g) `div` 3 == length (filter (== Alive) ngs) = Alive
     | otherwise = Dead
 
 class (LifeGrid a) => ConvinientGrid a where
@@ -176,7 +172,7 @@ randomRow n = do
 randomGrid :: IO ThreeDGrid
 randomGrid = do
   let g = defaultGrid [5, 5, 5]
-  row <- randomRow $ (size g !! 0 * size g !! 1 * size g !! 2)
+  row <- randomRow (head (size g) * size g !! 1 * size g !! 2)
   let csplit = splitE (sizeX g * sizeY g) row
   let rsplit = map (splitE (sizeY g)) csplit
   let ng = g { cells = rsplit }
@@ -191,19 +187,19 @@ splitE n ls
 
 keyboard :: (LifeGrid g, ConvinientGrid g, DrawableGrid g) => State g -> KeyboardMouseCallback
 keyboard state (Char c) Down _ _ = case c of
-  '\27' -> exitWith ExitSuccess
+  '\27' -> exitSuccess
   't' -> display state
   'd' -> do
-    update grid $ advance
+    update grid advance
     display state
   'i' -> do
-    update grid $ invertGrid
+    update grid invertGrid
     display state
   'k' -> do
-    update grid $ killGrid
+    update grid killGrid
     display state
   'l' -> do
-    update grid $ resurrectGrid
+    update grid resurrectGrid
     display state
   -- 'r' -> do
   --   newst <- makeState
@@ -234,7 +230,7 @@ display state = do
   color3f (Color3 1 1 1)
   gr <- readIORef $ grid state
   c <- readIORef $ Main.cycle state
-  putStrLn . concat $ map (\(s, v) -> s ++ ": " ++ (show v) ++ " ") $ countCellStates gr
+  putStrLn . concat $ map (\(s, v) -> s ++ ": " ++ show v ++ " ") $ countCellStates gr
   putStrLn $ "Generation: " ++ show c
   rotate (20 :: GLfloat) (Vector3 1 0.5 0)
   renderGrid gr
@@ -259,19 +255,16 @@ reshape size@(Size w h) = do
    loadIdentity
    let wf = fromIntegral w
        hf = fromIntegral h
-   -- if w <= h
-   --   then ortho (-50) 50 (-50 * hf/wf) (50 * hf/wf) (-1) 1
-   --   else ortho (-50 * wf/hf) (50 * wf/hf) (-50) 50 (-1) 1
    if w <= h
      then ortho (-2.5) 2.5 (-2.5 * hf/wf) (2.5 * hf/wf) (-10) 10
      else ortho (-2.5 * wf/hf) (2.5 * wf/hf) (-2.5) 2.5 (-10) 10
-   --perspective 45 ((fromIntegral h)/(fromIntegral w)) 0.1 100
+
    matrixMode $= Modelview 0
 
 
  
 vertify3 :: [(GLfloat,GLfloat,GLfloat)] -> IO ()
-vertify3 verts = sequence_ $ map (\(a,b,c) -> vertex $ Vertex3 a b c) verts 
+vertify3 = mapM_ (\(a,b,c) -> vertex $ Vertex3 a b c)
 
 cubeFrame w = renderPrimitive Lines $ vertify3
   [ ( w,-w, w), ( w, w, w),  ( w, w, w), (-w, w, w),
