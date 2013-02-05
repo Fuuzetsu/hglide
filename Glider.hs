@@ -236,7 +236,7 @@ display state = do
   c <- readIORef $ Main.cycle state
   putStrLn . concat $ map (\(s, v) -> s ++ ": " ++ (show v) ++ " ") $ countCellStates gr
   putStrLn $ "Generation: " ++ show c
-  
+  rotate (20 :: GLfloat) (Vector3 1 0.5 0)
   renderGrid gr
   translate (Vector3 4.0 0.0 (-1.0 :: GLfloat))
   flush
